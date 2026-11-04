@@ -5,84 +5,119 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"time"
 )
 
+const githubAPIBaseURL = "https://api.github.com"
+
 type GitHubUser struct {
-	Login       string `json:"login"`        // اسم المستخدم الفريد
-	ID          int    `json:"id"`           // المعرف الرقمي
-	AvatarURL   string `json:"avatar_url"`   // رابط الصورة الشخصية
-	HTMLURL     string `json:"html_url"`     // رابط الملف الشخصي على المتصفح
-	Name        string `json:"name"`         // الاسم الظاهر (قد يكون فارغاً)
-	Company     string `json:"company"`      // الشركة
-	Blog        string `json:"blog"`         // الموقع الشخصي
-	Location    string `json:"location"`     // الموقع الجغرافي
-	Bio         string `json:"bio"`          // السيرة الذاتية
-	PublicRepos int    `json:"public_repos"` // عدد المستودعات العامة
-	Followers   int    `json:"followers"`    // عدد المتابعين
-	Following   int    `json:"following"`    // من يتابعهم
-	CreatedAt   string `json:"created_at"`   // تاريخ إنشاء الحساب
+	Login       string `json:"login"`
+	ID          int    `json:"id"`
+	AvatarURL   string `json:"avatar_url"`
+	HTMLURL     string `json:"html_url"`
+	Name        string `json:"name"`
+	Company     string `json:"company"`
+	Blog        string `json:"blog"`
+	Location    string `json:"location"`
+	Bio         string `json:"bio"`
+	PublicRepos int    `json:"public_repos"`
+	Followers   int    `json:"followers"`
+	Following   int    `json:"following"`
+	CreatedAt   string `json:"created_at"`
 }
 
-// الهياكل البيانية (Structs)
 type Repository struct {
 	Name            string `json:"name"`
+	FullName        string `json:"full_name"`
+	Description     string `json:"description"`
+	HTMLURL         string `json:"html_url"`
 	StargazersCount int    `json:"stargazers_count"`
+	ForksCount      int    `json:"forks_count"`
 	Language        string `json:"language"`
 	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 type App struct {
-	ctx context.Context
+	ctx    context.Context
+	client *http.Client
 }
 
 func NewApp() *App {
-	return &App{}
+	return &App{
+		client: &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// دالة جلب المستودعات
-func (a *App) FetchingRepoItems(username string) ([]Repository, error) {
-	url := fmt.Sprintf("https://api.github.com/users/%s/repos", username)
+func (a *App) requestGitHub(endpoint string, target any) error {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	res, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBaseURL+endpoint, nil)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("create GitHub request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	client := a.client
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request GitHub API: %w", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API error: %d", res.StatusCode)
+		switch res.StatusCode {
+		case http.StatusNotFound:
+			return fmt.Errorf("GitHub user or resource was not found")
+		case http.StatusForbidden:
+			return fmt.Errorf("GitHub API rate limit reached or request forbidden")
+		default:
+			return fmt.Errorf("GitHub API returned status %d", res.StatusCode)
+		}
 	}
 
-	var repos []Repository
-	err = json.NewDecoder(res.Body).Decode(&repos)
-	if err != nil {
-		return nil, err
+	if err := json.NewDecoder(res.Body).Decode(target); err != nil {
+		return fmt.Errorf("decode GitHub response: %w", err)
 	}
 
-	return repos, nil
+	return nil
 }
 
-func (a *App) FetchingUser(Username string) (*GitHubUser, error) {
-	Url := fmt.Sprintf("https://api.github.com/users/%s", Username)
+// FetchingUser returns the public profile for a GitHub username.
+func (a *App) FetchingUser(username string) (*GitHubUser, error) {
+	username = url.PathEscape(username)
+	var user GitHubUser
 
-	res, err := http.Get(Url)
-	if err != nil {
+	if err := a.requestGitHub("/users/"+username, &user); err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("there an error with the api :%d", res.StatusCode)
-	}
+	return &user, nil
+}
 
-	var User GitHubUser
-	err = json.NewDecoder(res.Body).Decode(&User)
-	if err != nil {
+// FetchingRepoItems returns up to 100 public repositories for a GitHub user.
+func (a *App) FetchingRepoItems(username string) ([]Repository, error) {
+	username = url.PathEscape(username)
+	endpoint := fmt.Sprintf("/users/%s/repos?per_page=100&sort=updated", username)
+
+	var repositories []Repository
+	if err := a.requestGitHub(endpoint, &repositories); err != nil {
 		return nil, err
 	}
-	return &User, err
+
+	return repositories, nil
 }
