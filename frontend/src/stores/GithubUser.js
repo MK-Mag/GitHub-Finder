@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { FetchingRepoItems , FetchingUser } from '../../wailsjs/go/main/App' // تأكد من صحة المسار
+import { FetchingRepoItems, FetchingUser } from '../../wailsjs/go/main/App'
 
 export const useGithubStore = defineStore('github', {
   state: () => ({
@@ -10,62 +10,57 @@ export const useGithubStore = defineStore('github', {
   }),
 
   getters: {
-    // تجهيز بيانات لغات البرمجة (Pie Chart)
     languageChartData(state) {
       const counts = {}
-      state.repositories.forEach(repo => {
-        if (repo.language) {
-          counts[repo.language] = (counts[repo.language] || 0) + 1
+
+      for (const repository of state.repositories) {
+        if (repository.language) {
+          counts[repository.language] = (counts[repository.language] || 0) + 1
         }
-      })
+      }
+
       return {
+        labels: Object.keys(counts),
         series: Object.values(counts),
-        labels: Object.keys(counts)
       }
     },
 
-    // تجهيز بيانات أشهر 5 مشاريع (Bar Chart)
     topReposChartData(state) {
-      const sorted = [...state.repositories]
-        .sort((a, b) => b.stargazers_count - a.stargazers_count) // انتبه للصيغة الصغيرة
+      const topRepositories = [...state.repositories]
+        .sort((a, b) => b.stargazers_count - a.stargazers_count)
         .slice(0, 5)
 
       return {
+        categories: topRepositories.map(repository => repository.name),
         series: [{
           name: 'Stars',
-          data: sorted.map(r => r.stargazers_count)
+          data: topRepositories.map(repository => repository.stargazers_count),
         }],
-        categories: sorted.map(r => r.name)
       }
-    }
+    },
   },
 
   actions: {
-    async loadUserStats(username) {
+    async loadUser(username) {
       this.loading = true
       this.error = null
+      this.user = null
+      this.repositories = []
+
       try {
-        const data = await FetchingRepoItems(username)
-        this.repositories = data || []
-      } catch (err) {
-        this.error = "Failed to get the data"
-        console.error(err)
+        const [profile, repositories] = await Promise.all([
+          FetchingUser(username),
+          FetchingRepoItems(username),
+        ])
+
+        this.user = profile
+        this.repositories = repositories || []
+      } catch (error) {
+        this.error = error?.message || 'Unable to retrieve data from GitHub.'
+        console.error('GitHub Finder:', error)
       } finally {
         this.loading = false
       }
     },
-    async loadUserinfo(username){
-      this.loading = true
-      this.error = null
-      try{
-        const profile = await FetchingUser(username)
-        this.user = profile
-      } catch(err){
-        this.error = "Failed to get the profile data"
-        console.error(err)
-      } finally {
-        this.loading = false
-      }
-    }
-  }
+  },
 })
